@@ -2080,6 +2080,7 @@ async function normalizeTalkChat(chat: any, box: any, historyState = talkMessage
     lastMessageTime: historyState === "new" ? 0 : talkBoxLastTime(box),
     favoriteTimestamp,
     pinned: favoriteTimestamp > 0,
+    muted: Boolean(chat?.raw?.notificationDisabled),
     historyState,
     identityKey: identity?.identityKey,
     profileSnapshotTime: identity?.profileSnapshotTime,
@@ -2520,6 +2521,7 @@ async function loadFriendsList(persist = true, canPersist: () => boolean = () =>
       statusMessage: String(contact?.statusMessage ?? ""),
       favoriteTime,
       isFavorite: favoriteTime > 0,
+      muted: Boolean((Number(contact?.settings ?? 0) & 1) !== 0),
     });
   }
 
@@ -5240,7 +5242,7 @@ async function handle(request: any) {
     const features = ["talk", "openchat", "media", "asset-proxy", "e2ee", "session-restore", "history-sqlite", "outbox", "talk-read-range", "e2ee-media"];
     if (callStatus.enabled) features.push("call-audio-1to1");
     if (callStatus.incomingAnswer) features.push("call-audio-incoming");
-    features.push("album-read", "profile-update", "note-list", "note-create", "note-edit", "note-delete", "note-like", "note-comment", "note-image-upload", "group-rename", "group-invite", "group-leave", "friend-rename", "friend-favorite", "friend-mute", "profile-avatar-upload");
+    features.push("album-read", "profile-update", "note-list", "note-create", "note-edit", "note-delete", "note-like", "note-comment", "note-image-upload", "group-rename", "group-invite", "group-leave", "group-mute", "friend-rename", "friend-favorite", "friend-mute", "openchat-mute", "profile-avatar-upload");
     emit({
       id,
       ok: true,
@@ -5261,7 +5263,7 @@ async function handle(request: any) {
     return;
   }
 
-  if (method.startsWith("group.") || method.startsWith("friend.")) {
+  if (method.startsWith("group.") || method.startsWith("friend.") || method === "openchat.mute") {
     if (!client) { replyError(id, new Error("not authenticated")); return; }
     try {
       const params = request?.params ?? {};
@@ -5270,13 +5272,17 @@ async function handle(request: any) {
         case "group.rename": result = await LineJsAdapter.renameGroup(client, params.chatId, params.name); break;
         case "group.invite": result = await LineJsAdapter.inviteGroupFriends(client, params.chatId, params.memberMids); break;
         case "group.leave": result = await LineJsAdapter.leaveGroup(client, params.chatId); break;
+        case "group.mute": result = await LineJsAdapter.setGroupMuted(client, params.chatId, params.muted); break;
         case "friend.rename": result = await LineJsAdapter.renameFriend(client, params.mid, params.name); break;
         case "friend.favorite": result = await LineJsAdapter.setFriendFavorite(client, params.mid, params.favorite); break;
         case "friend.mute": result = await LineJsAdapter.setFriendMuted(client, params.mid, params.muted); break;
+        case "openchat.mute": result = await LineJsAdapter.setOpenChatMuted(client, params.chatId, params.muted); break;
         default: throw new Error("Unknown group/friend method");
       }
       emit({ id, ok: true, result });
-      void startSync("delta").catch(() => undefined);
+      if (!method.endsWith(".mute")) {
+        void startSync("delta").catch(() => undefined);
+      }
     } catch (error) { replyError(id, error); }
     return;
   }

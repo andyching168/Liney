@@ -9,12 +9,13 @@ import "./LineWorkspacePolish.css";
 type Friend = { id: string; name: string; avatarUrl?: string };
 
 export function LineChatManageModal({
-  room, friends, onClose, onUpdated,
+  room, friends, onClose, onUpdated, onMuteChanged,
 }: {
   room: { id: string; name: string; kind: "dm" | "group" };
   friends: Friend[];
   onClose: () => void;
   onUpdated?: () => void | Promise<void>;
+  onMuteChanged?: (mid: string, muted: boolean) => void;
 }) {
   const { t } = useAppTranslation();
   const [name, setName] = useState(room.name);
@@ -40,6 +41,9 @@ export function LineChatManageModal({
       await lineyEngine.request(method, params, 35_000);
       if (method === "friend.favorite") {
         await onUpdated?.();
+      }
+      if (method === "friend.mute" && typeof params.mid === "string" && typeof params.muted === "boolean") {
+        onMuteChanged?.(params.mid, params.muted);
       }
       if (method === "group.leave") { onClose(); return; }
       if (method === "group.invite") {

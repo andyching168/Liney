@@ -12,6 +12,12 @@ export function requireFriendMid(value: unknown): string {
   }
   return value;
 }
+export function requireOpenChatMid(value: unknown): string {
+  if (typeof value !== "string" || !/^m[a-f0-9]{32}$/i.test(value)) {
+    throw new TypeError("A LINE OpenChat MID is required");
+  }
+  return value;
+}
 function displayName(value: unknown) {
   if (typeof value !== "string" || !value.trim() || value.length > 100) {
     throw new TypeError("Name must contain 1–100 characters");
@@ -53,5 +59,39 @@ export async function setFriendMuted(client: Client, friendId: string, muted: un
   if (typeof muted !== "boolean") throw new TypeError("muted must be boolean");
   const friend = await client.getUser(requireFriendMid(friendId));
   await friend.setNotificationDisabled(muted);
+  return { muted };
+}
+export async function setGroupMuted(client: Client, roomId: string, muted: unknown) {
+  if (typeof muted !== "boolean") throw new TypeError("muted must be boolean");
+  const chatMid = requireTalkGroupMid(roomId);
+  const group = await client.getChat(chatMid);
+  await group.updateChat({
+    chat: {
+      ...(group.raw ?? {}),
+      chatMid,
+      notificationDisabled: muted,
+    },
+    updatedAttribute: "NOTIFICATION_SETTING",
+  });
+  return { muted };
+}
+export async function setOpenChatMuted(client: Client, chatId: string, muted: unknown) {
+  if (typeof muted !== "boolean") throw new TypeError("muted must be boolean");
+  const squareChatMid = requireOpenChatMid(chatId);
+  const info = await client.base.square.getSquareChat({ squareChatMid });
+  const member = info?.squareChatMember;
+  if (!member?.squareMemberMid) {
+    throw new Error("OpenChat member information is unavailable");
+  }
+  await client.base.square.updateSquareChatMember({
+    request: {
+      updatedAttrs: ["NOTIFICATION_MESSAGE"],
+      chatMember: {
+        ...member,
+        squareChatMid,
+        notificationForMessage: !muted,
+      },
+    },
+  });
   return { muted };
 }

@@ -10,6 +10,7 @@ import {
   ArrowLeft,
   Archive,
   Bell,
+  BellOff,
   ChevronDown,
   CheckCheck,
   Ellipsis,
@@ -86,7 +87,7 @@ type AuthMode = "qr" | "password";
 type EngineState = "browser-mock" | "starting" | "ready" | "error";
 type CallState = "idle" | "incoming" | "acquiring" | "connecting" | "ringing" | "in-call" | "ending" | "ended" | "failed";
 const LINE_SYSTEM_ACCOUNT_MID = "u085311ecd9e3e3d74ae4c9f5437cbcb5";
-type LiveChatResult = { id: string; name: string; kind: "dm" | "group" | "openchat"; avatarUrl?: string; identityKey?: string; profileIdentityKey?: string; profileSnapshotTime?: number; profileFetchedAt?: number; raw?: Record<string, unknown>; preview?: string; unread?: number; lastMessageTime?: number; memberCount?: number; pinned?: boolean; favoriteTimestamp?: number; statusMessage?: string; isFavorite?: boolean; favoriteTime?: number; historyState?: "available" | "new" | "unavailable" };
+type LiveChatResult = { id: string; name: string; kind: "dm" | "group" | "openchat"; avatarUrl?: string; identityKey?: string; profileIdentityKey?: string; profileSnapshotTime?: number; profileFetchedAt?: number; raw?: Record<string, unknown>; preview?: string; unread?: number; lastMessageTime?: number; memberCount?: number; muted?: boolean; pinned?: boolean; favoriteTimestamp?: number; statusMessage?: string; isFavorite?: boolean; favoriteTime?: number; historyState?: "available" | "new" | "unavailable" };
 type HistoryCandidate = { id: string; name: string; messageCount: number; latestMessageTime: number };
 type LiveMessageResult = {
   id: string;
@@ -436,6 +437,7 @@ function mapLiveChatResult(item: LiveChatResult, index: number): Chat {
     ...profile,
     accent: avatarColor(index),
     lastMessageTime: item.historyState === "new" ? 0 : item.lastMessageTime ?? 0,
+    muted: Boolean(item.muted),
     pinned: item.pinned,
     favoriteTimestamp: item.favoriteTimestamp,
     historyState: item.historyState ?? "available",
@@ -491,6 +493,7 @@ function mapLiveFriendResult(item: LiveChatResult, index: number): Chat {
     accent: avatarColor(index),
     isFavorite: item.isFavorite,
     favoriteTime: item.favoriteTime,
+    muted: Boolean(item.muted),
   };
 }
 
@@ -774,6 +777,15 @@ function MainApp() {
       return {};
     }
   });
+  const [localMutes, setLocalMutes] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem("liney.localMutes");
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+  const localMutesRef = useRef<Record<string, boolean>>(localMutes);
   const [profile, setProfile] = useState<ProfileResult | null>(null);
   const [clientIdentity, setClientIdentity] = useState<ClientIdentityResult | null>(null);
   const [composer, setComposer] = useState("");
@@ -1619,7 +1631,12 @@ function MainApp() {
             if (existing.some((item) => item.id === serverMessageId)) return current;
             return { ...current, [chatId]: [...existing, message] };
           });
-          if (!raw.isMine && !isChatActuallyVisible(chatId)) {
+          const knownFriend = (liveFriendsRef.current ?? []).find((friend) => friend.id === chatId);
+          const localMuteOverride = localMutesRef.current[chatId];
+          const chatIsMuted = localMuteOverride !== undefined
+            ? localMuteOverride
+            : Boolean(knownChat?.muted || knownFriend?.muted);
+          if (!raw.isMine && !chatIsMuted && !isChatActuallyVisible(chatId)) {
             // A Flex/Rich message may arrive twice with different text previews.
             // The server message ID, not the rendered body, owns the notification.
             const now = Date.now();
@@ -1807,12 +1824,25 @@ function MainApp() {
     }
   }, [localPins]);
 
+  useEffect(() => {
+    localMutesRef.current = localMutes;
+    try {
+      localStorage.setItem("liney.localMutes", JSON.stringify(localMutes));
+    } catch {
+      // Mute state is best-effort if WebView storage is unavailable.
+    }
+  }, [localMutes]);
+
   const allFriends = useMemo(
     () => usesEngineRuntime ? (liveFriends ?? []) : seedChats.filter((chat) => chat.kind === "dm"),
     [liveFriends, usesEngineRuntime],
   );
   const favoriteFriendMap = useMemo(
     () => new Map(allFriends.filter((friend) => friend.isFavorite).map((friend) => [friend.id, friend])),
+    [allFriends],
+  );
+  const mutedFriendMap = useMemo(
+    () => new Map(allFriends.filter((friend) => friend.muted).map((friend) => [friend.id, true])),
     [allFriends],
   );
   const allChats = useMemo(() => {
@@ -1824,10 +1854,15 @@ function MainApp() {
         const localPinTimestamp = localPins[chat.id] ?? 0;
         const remotePinTimestamp = chat.favoriteTimestamp ?? 0;
         const favorite = chat.kind === "dm" ? favoriteFriendMap.get(chat.id) : undefined;
+        const localMuteValue = localMutes[chat.id];
+        const muted = localMuteValue !== undefined
+          ? localMuteValue
+          : Boolean(chat.muted || (chat.kind === "dm" && mutedFriendMap.get(chat.id)));
         return {
           ...chat,
           avatarUrl: chat.kind === "dm" ? currentTalkAvatarUrl(chat) : chat.avatarUrl,
           ...(favorite ? { isFavorite: true, favoriteTime: favorite.favoriteTime } : {}),
+          muted,
           pinned: Boolean(chat.pinned || localPinTimestamp),
           favoriteTimestamp: Math.max(remotePinTimestamp, localPinTimestamp),
         };
@@ -1837,7 +1872,7 @@ function MainApp() {
         if ((a.lastMessageTime ?? 0) !== (b.lastMessageTime ?? 0)) return (b.lastMessageTime ?? 0) - (a.lastMessageTime ?? 0);
         return (b.favoriteTimestamp ?? 0) - (a.favoriteTimestamp ?? 0);
       });
-  }, [liveChats, allFriends, favoriteFriendMap, localPins, settings.openchat, usesEngineRuntime]);
+  }, [liveChats, allFriends, favoriteFriendMap, mutedFriendMap, localPins, localMutes, settings.openchat, usesEngineRuntime]);
   const totalUnread = useMemo(
     () => allChats.reduce((sum, chat) => sum + Math.max(0, chat.unread ?? 0), 0),
     [allChats],
@@ -2537,6 +2572,20 @@ function MainApp() {
       else next[chatId] = Date.now();
       return next;
     });
+  }
+
+  function toggleChatMute(chat: Chat) {
+    if (!chat.id || chat.id === "__liney__") return;
+    const nextMuted = !chat.muted;
+    setLocalMutes((current) => ({ ...current, [chat.id]: nextMuted }));
+    if (!lineyEngine.isNative || !authenticated) return;
+    if (chat.kind === "dm" && /^u[a-f0-9]{32}$/i.test(chat.id)) {
+      void lineyEngine.request("friend.mute", { mid: chat.id, muted: nextMuted }, 20_000).catch(() => undefined);
+    } else if (chat.kind === "group" && /^c[a-f0-9]{32}$/i.test(chat.id)) {
+      void lineyEngine.request("group.mute", { chatId: chat.id, muted: nextMuted }, 20_000).catch(() => undefined);
+    } else if (chat.kind === "openchat" && /^m[a-f0-9]{32}$/i.test(chat.id)) {
+      void lineyEngine.request("openchat.mute", { chatId: chat.id, muted: nextMuted }, 20_000).catch(() => undefined);
+    }
   }
 
   async function mergeDuplicateChats(aliasMid: string, canonicalMid: string) {
@@ -3597,6 +3646,7 @@ function MainApp() {
         filter={listFilter}
         onFilter={setListFilter}
         onTogglePin={toggleLocalPin}
+        onToggleMute={toggleChatMute}
         mergeCandidates={allChats.filter((chat) => chat.kind === "dm")}
         onMerge={mergeDuplicateChats}
         onCreate={() => setNewChatOpen(true)}
@@ -3645,6 +3695,7 @@ function MainApp() {
         onNotes={() => setNotesRoom({ id: activeChat.id, title: activeChat.name })}
         manageAvailable={lineyEngine.isNative && authenticated && ((activeChat.kind === "group" && /^c[a-f0-9]{32}$/i.test(activeChat.id)) || (activeChat.kind === "dm" && /^u[a-f0-9]{32}$/i.test(activeChat.id)))}
         onManage={() => setManagedChat(activeChat)}
+        onToggleMute={() => toggleChatMute(activeChat)}
         windowActive={windowActive}
         markReadOnBottom={settings.markReadOnBottom}
         showUnreadDivider={settings.showUnreadDivider}
@@ -3672,7 +3723,7 @@ function MainApp() {
         {imageViewerSrc && <ImageViewerOverlay src={imageViewerSrc} onClose={() => setImageViewerSrc(null)} />}
         {albumsOpen && <LineAlbumsModal onClose={() => setAlbumsOpen(false)} />}
         {notesRoom && <LineNotesModal homeId={notesRoom.id} title={notesRoom.title} onClose={() => setNotesRoom(null)} />}
-        {managedChat && (managedChat.kind === "dm" || managedChat.kind === "group") && <LineChatManageModal room={{ id: managedChat.id, kind: managedChat.kind, name: managedChat.name }} friends={allFriends} onUpdated={() => loadLiveFriends()} onClose={() => setManagedChat(null)} />}
+        {managedChat && (managedChat.kind === "dm" || managedChat.kind === "group") && <LineChatManageModal room={{ id: managedChat.id, kind: managedChat.kind, name: managedChat.name }} friends={allFriends} onUpdated={() => loadLiveFriends()} onMuteChanged={(mid, muted) => setLocalMutes((current) => ({ ...current, [mid]: muted }))} onClose={() => setManagedChat(null)} />}
         {settingsOpen && <SettingsModal initialTab={settingsInitialTab} themeMode={themeMode} dark={dark} settings={settings} callAvailable={callAvailable} onLanguageChange={(value) => updateSetting("language", value)} onThemeMode={setThemeMode} onSetting={updateAppSettings} onDensity={(value) => updateSetting("density", value)} onRadius={(value) => updateSetting("radius", value)} onClearHistory={() => void clearLocalHistory()} onClearStickerCache={() => void clearStickerCache()} onFullSync={() => void startFullSync()} onProfileChange={setProfile} onClose={() => setSettingsOpen(false)} />}
         {callOpen && <CallModal chat={callChat} peer={callPeer} remoteVideoFrame={callRemoteVideoFrame} state={callState} muted={callMuted} microphoneAvailable={callMicrophoneAvailable} speakerAvailable={callSpeakerAvailable} videoCapable={callVideoCapable} videoEnabled={callVideoEnabled} cameraAvailable={callCameraAvailable} screenSharing={callScreenSharing} screenShareAvailable={callScreenShareAvailable} screenTargets={callScreenTargets} screenTarget={callScreenTarget} screenManagedBySystem={callScreenManagedBySystem} error={callError} incomingSupported={callIncomingAvailable} outputDevices={callOutputs} outputTarget={callOutputTarget} onAccept={() => void acceptCall("AUDIO")} onAcceptVideo={() => void acceptCall("VIDEO")} onReject={() => void rejectCall()} onMute={() => void toggleCallMute()} onVideo={() => void toggleCallVideo()} onScreenShare={() => void toggleScreenShare()} onUpgradeVideo={() => void upgradeCallToVideo()} mode={callMode} onScreenTarget={setCallScreenTarget} onOutput={(target) => void changeCallOutput(target)} onClose={() => void endCall()} />}
         {usesEngineRuntime && authenticated && syncProgress.visible && (
@@ -3821,6 +3872,7 @@ function ChatList({
   filter,
   onFilter,
   onTogglePin,
+  onToggleMute,
   mergeCandidates,
   onMerge,
   onCreate,
@@ -3839,6 +3891,7 @@ function ChatList({
   filter: "all" | "unread" | "pinned" | "favorites";
   onFilter: (filter: "all" | "unread" | "pinned" | "favorites") => void;
   onTogglePin: (id: string) => void;
+  onToggleMute: (chat: Chat) => void;
   mergeCandidates: Chat[];
   onMerge: (aliasMid: string, canonicalMid: string) => Promise<void>;
   onCreate: () => void;
@@ -4014,6 +4067,7 @@ function ChatList({
               <span className="chat-title-line">
                 <strong>{chat.id === "__liney__" ? t(chat.name) : chat.name}</strong>
                 <span className="chat-title-flags">
+                  {chat.muted ? <BellOff size={12} className="muted-icon" aria-label={t("ปิดแจ้งเตือนอยู่")} /> : null}
                   {chat.isFavorite ? <Star size={12} className="favorite-icon" fill="currentColor" aria-label={t("รายการโปรด")} /> : null}
                   {chat.pinned ? <PinIcon size={12} className="pin-icon" fill="currentColor" aria-label={t("ปักหมุด")} /> : null}
                   <time>{chat.time}</time>
@@ -4021,7 +4075,7 @@ function ChatList({
               </span>
               <span className="chat-preview-line">
                 <span className="chat-preview">{chat.id === "__liney__" ? t(chat.subtitle) : chat.subtitle}</span>
-                {chat.unread ? <span className="unread-badge">{chat.unread > 99 ? "99+" : chat.unread}</span> : null}
+                {chat.unread ? <span className={`unread-badge${chat.muted ? " is-muted" : ""}`}>{chat.unread > 99 ? "99+" : chat.unread}</span> : null}
               </span>
             </span>
           </button>;
@@ -4043,6 +4097,15 @@ function ChatList({
           >
             <PinIcon size={15} fill={contextMenu.chat.pinned ? "currentColor" : "none"} />
             {contextMenu.chat.pinned ? t("เลิกปักหมุด") : t("ปักหมุด")}
+          </button>
+          <button
+            onClick={() => {
+              onToggleMute(contextMenu.chat);
+              setContextMenu(null);
+            }}
+          >
+            {contextMenu.chat.muted ? <Bell size={15} /> : <BellOff size={15} />}
+            {contextMenu.chat.muted ? t("เปิดแจ้งเตือน") : t("ปิดแจ้งเตือน")}
           </button>
           {section === "messages" && contextMenu.chat.kind === "dm" ? (
             <button
@@ -4333,6 +4396,7 @@ function Conversation({
   onNotes,
   manageAvailable,
   onManage,
+  onToggleMute,
   windowActive,
   markReadOnBottom,
   showUnreadDivider,
@@ -4379,6 +4443,7 @@ function Conversation({
   onNotes: () => void;
   manageAvailable: boolean;
   onManage: () => void;
+  onToggleMute: () => void;
   windowActive: boolean;
   markReadOnBottom: boolean;
   showUnreadDivider: boolean;
@@ -4867,18 +4932,42 @@ function Conversation({
             <div className="conversation-title-row">
               <h2>{chat.id === "__liney__" ? t(chat.name) : chat.name}</h2>
               {chat.kind === "openchat" && <span className="openchat-chip">OpenChat</span>}
+              {chat.muted && chat.id !== "__liney__" ? (
+                <span className="muted-chip" title={t("ปิดแจ้งเตือนอยู่")}>
+                  <BellOff size={11} />
+                  {t("ปิดแจ้งเตือนอยู่")}
+                </span>
+              ) : null}
             </div>
             <span>{chat.detail ?? chat.subtitle}</span>
           </div>
         </div>
         <div className="header-actions" ref={headerActionsRef}>
+          {chat.id !== "__liney__" ? (
+            <button
+              className={`icon-button mute-action${chat.muted ? " is-muted" : ""}`}
+              type="button"
+              onClick={onToggleMute}
+              aria-pressed={Boolean(chat.muted)}
+              title={chat.muted ? t("เปิดแจ้งเตือนแชตนี้") : t("ปิดแจ้งเตือนแชตนี้")}
+              aria-label={chat.muted ? t("เปิดแจ้งเตือนแชตนี้") : t("ปิดแจ้งเตือนแชตนี้")}
+            >
+              {chat.muted ? <BellOff size={18} /> : <Bell size={18} />}
+            </button>
+          ) : null}
           <button className="icon-button call-action" onClick={onCall} title={callAvailable ? t("โทรเสียง") : t("สายเสียงยังไม่พร้อม")} aria-label={t("โทรเสียง")} disabled={!canSend || !callAvailable}><Phone size={18} /></button>
           <button className="icon-button video-action" onClick={onVideoCall} title={callAvailable ? t("วิดีโอคอล (ทดลอง)") : t("ระบบโทรยังไม่พร้อม")} aria-label={t("วิดีโอคอล")} disabled={!canSend || !callAvailable}><Video size={19} /></button>
-          {(albumsAvailable || notesAvailable || manageAvailable) ? (
+          {(chat.id !== "__liney__" || albumsAvailable || notesAvailable || manageAvailable) ? (
             <div className="conversation-more">
               <button className="icon-button more-action" type="button" onClick={() => setHeaderMenuOpen((open) => !open)} aria-label={t("ตัวเลือกเพิ่มเติมของแชต")} aria-haspopup="menu" aria-expanded={headerMenuOpen} title={t("ตัวเลือกเพิ่มเติม")}><Ellipsis size={20} /></button>
               {headerMenuOpen ? (
                 <div className="conversation-more-menu" role="menu" aria-label={t("ตัวเลือกของแชต")}>
+                  {chat.id !== "__liney__" ? (
+                    <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onToggleMute(); }}>
+                      {chat.muted ? <Bell size={17} /> : <BellOff size={17} />}
+                      {chat.muted ? t("เปิดแจ้งเตือน") : t("ปิดแจ้งเตือน")}
+                    </button>
+                  ) : null}
                   {manageAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onManage(); }}><Info size={17} />{t("ข้อมูลและจัดการแชต")}</button> : null}
                   {albumsAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onAlbums(); }}><Image size={17} />{t("อัลบั้มรูปภาพ")}</button> : null}
                   {notesAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onNotes(); }}><Pencil size={17} />{t("โน้ต")}</button> : null}

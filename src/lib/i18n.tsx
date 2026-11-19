@@ -520,6 +520,11 @@ const ENGLISH_TRANSLATIONS: Record<string, string> = {
   "แชตและ OpenChat ของคุณจะอยู่ด้านซ้าย": "Your chats and OpenChat rooms will appear on the left",
   "กดโลโก้ L เพื่อเข้าสู่ระบบด้วย QR": "Select the L logo to sign in with a QR code",
   "การโทร": "Calls",
+  "ปิดแจ้งเตือนแชตนี้": "Mute this chat",
+  "เปิดแจ้งเตือนแชตนี้": "Unmute this chat",
+  "ปิดแจ้งเตือน": "Mute",
+  "เปิดแจ้งเตือน": "Unmute",
+  "ปิดแจ้งเตือนอยู่": "Muted",
 };
 
 const LanguageContext = createContext<AppLanguage>("th");
