@@ -8,7 +8,16 @@ import { listLineAlbums, listLineAlbumPhotos, previewLineAlbumCover, previewLine
 import { listNotes, getNote, createNote, updateNote, deleteNote, likeNote, commentNote } from "./notes";
 import { renameGroup, inviteGroupFriends, leaveGroup, renameFriend, setFriendFavorite, setFriendMuted } from "./social";
 import { uploadProfileAvatar } from "./profile-media";
-import { loginWithAuthToken, loginWithPassword, loginWithQR, Client as LineJsRuntimeClient, SquareMessage, TalkMessage, User as LineJsUser, type Client } from "@evex/linejs";
+import {
+  loginWithAuthToken as linejsLoginWithAuthToken,
+  loginWithPassword as linejsLoginWithPassword,
+  loginWithQR as linejsLoginWithQR,
+  Client as LineJsRuntimeClient,
+  SquareMessage,
+  TalkMessage,
+  User as LineJsUser,
+  type Client,
+} from "@evex/linejs";
 import { BaseClient } from "@evex/linejs/base";
 import { MemoryStorage } from "@evex/linejs/storage";
 import { parseCancelCall, parseIncomingCall } from "@evex/linejs/call";
@@ -32,7 +41,7 @@ export {
   type CallSessionState,
 } from "@evex/linejs/call";
 
-export const LINEJS_VERSION = "3.5.0";
+export const LINEJS_VERSION = "3.6.5";
 export type LineClient = Client;
 
 export const LineJsAdapter = {
@@ -170,12 +179,86 @@ export function bindClientStorage(client: LineClient, storage: unknown): void {
   if (base.storage !== storage) throw new Error("LINEJS client storage could not be rebound");
 }
 
+// Workaround for evex-dev/linejs#280: LINE's LEGY encrypted gateway (/enc)
+// returns empty-body HTTP 404 (x-lcr: 386) for Talk RPCs. Route through plain
+// transport unless the caller explicitly configures `legy.encrypted`.
+export function withPlainLegyFallback<T extends Record<string, any> | undefined>(init: T): T {
+  const baseInit = (init ?? {}) as Record<string, any>;
+  if (baseInit.legy?.encrypted !== undefined) return init;
+  return {
+    ...baseInit,
+    legy: { ...(baseInit.legy ?? {}), encrypted: false },
+  } as T;
+}
+
+// LINE moved group Note REST calls from `/mh/api/v57/post/*` (which now returns
+// code=500 "一時的なエラーにより...") to `/ext/note/nt/api/v57/post/*` (the same
+// prefix linejs already uses for note likes and comments).
+export function rewriteDeprecatedNoteUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.pathname.startsWith("/mh/api/v57/post/")) {
+      parsed.pathname = parsed.pathname.replace(/^\/mh\/api\/v57\/post\//, "/ext/note/nt/api/v57/post/");
+      return parsed.toString();
+    }
+  } catch {
+    // Non-URL input is passed through unchanged.
+  }
+  return url;
+}
+
+export function installLineyTimelineCompat<T extends Client>(client: T): T {
+  const base = (client as any)?.base;
+  if (!base || typeof base.fetch !== "function" || base.__lineyTimelineCompatInstalled) {
+    return client;
+  }
+  const originalFetch = base.fetch.bind(base);
+  base.fetch = (info: RequestInfo | URL, init?: RequestInit) => {
+    if (typeof info === "string") {
+      return originalFetch(rewriteDeprecatedNoteUrl(info), init);
+    }
+    if (info instanceof URL) {
+      return originalFetch(rewriteDeprecatedNoteUrl(info.toString()), init);
+    }
+    if (info instanceof Request) {
+      const rewritten = rewriteDeprecatedNoteUrl(info.url);
+      if (rewritten !== info.url) {
+        return originalFetch(new Request(rewritten, info), init);
+      }
+    }
+    return originalFetch(info, init);
+  };
+  base.__lineyTimelineCompatInstalled = true;
+  return client;
+}
+
+export async function loginWithQR(
+  opts: Parameters<typeof linejsLoginWithQR>[0],
+  init?: Parameters<typeof linejsLoginWithQR>[1],
+): Promise<Client> {
+  return installLineyTimelineCompat(await linejsLoginWithQR(opts, withPlainLegyFallback(init)));
+}
+
+export async function loginWithPassword(
+  opts: Parameters<typeof linejsLoginWithPassword>[0],
+  init?: Parameters<typeof linejsLoginWithPassword>[1],
+): Promise<Client> {
+  return installLineyTimelineCompat(await linejsLoginWithPassword(opts, withPlainLegyFallback(init)));
+}
+
+export async function loginWithAuthToken(
+  token: Parameters<typeof linejsLoginWithAuthToken>[0],
+  init?: Parameters<typeof linejsLoginWithAuthToken>[1],
+): Promise<Client> {
+  return installLineyTimelineCompat(await linejsLoginWithAuthToken(token, withPlainLegyFallback(init)));
+}
+
 export async function loginWithBrandedQR(
-  opts: Parameters<typeof loginWithQR>[0],
-  init: Parameters<typeof loginWithQR>[1],
+  opts: Parameters<typeof linejsLoginWithQR>[0],
+  init: Parameters<typeof linejsLoginWithQR>[1],
   brand: LineyLoginBrand,
 ): Promise<Client> {
-  const base = new BaseClient(init as any);
+  const base = new BaseClient(withPlainLegyFallback(init) as any);
   const loginProcess = (base as any).loginProcess;
   const modelName = String(brand.modelName || "Liney-Linux").slice(0, 48);
   const systemName = String(brand.systemName || "Liney-Linux").slice(0, 48);
@@ -196,7 +279,7 @@ export async function loginWithBrandedQR(
   base.on("pincall", opts.onPincodeRequest);
   await loginProcess.withQrCode({});
   await loginProcess.ready();
-  return new LineJsRuntimeClient(base as any) as Client;
+  return installLineyTimelineCompat(new LineJsRuntimeClient(base as any) as Client);
 }
 
 // Thin helpers to avoid spreading LINEJS types throughout engine
