@@ -4,6 +4,21 @@ export type AppLanguage = "th" | "en";
 export type TranslationValues = Record<string, string | number>;
 
 const ENGLISH_TRANSLATIONS: Record<string, string> = {
+  "เซิร์ฟเวอร์ MCP": "MCP Server",
+  "เปิดใช้ MCP server": "Enable MCP server",
+  "ฟังเฉพาะ 127.0.0.1 และต้องใช้ token ก่อนเรียกใช้": "Listens on 127.0.0.1 only; a token is required",
+  "อนุญาตให้ส่งข้อความ (send_message)": "Allow sending messages (send_message)",
+  "MCP client จะส่งข้อความในนามคุณได้ ปิดไว้เป็นค่าเริ่มต้น": "MCP clients can send messages as you. Off by default",
+  "พอร์ต": "Port",
+  "โทเคนสำหรับเชื่อมต่อ": "Bearer token",
+  "ใช้ใน Authorization: Bearer <token> · เก็บเป็นความลับ": "Use as Authorization: Bearer <token> · keep it secret",
+  "คัดลอก token": "Copy token",
+  "คัดลอกแล้ว": "Copied",
+  "สร้าง token ใหม่": "Regenerate token",
+  "เริ่มไม่สำเร็จ: {{error}}": "Failed to start: {{error}}",
+  "ทำงานอยู่: {{url}}": "Running: {{url}}",
+  "ปิดอยู่": "Disabled",
+
   "เมนูหลัก Liney": "Main menu",
   "แชต": "Chats",
   "เพื่อน": "Friends",

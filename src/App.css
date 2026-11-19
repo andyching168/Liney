@@ -1491,3 +1491,5 @@ button { border: 0; background: none; cursor: pointer; }
 .update-release-notes p { margin:6px 0 0; }
 .update-footnote,.update-error { margin:10px 16px 16px; }
 .update-error { color:var(--danger, #d34b4b); }
+
+.mcp-port-input { width: 96px; padding: 6px 8px; border-radius: var(--radius-sm, 6px); border: 1px solid var(--border, rgba(128,128,128,.35)); background: transparent; color: inherit; font: inherit; }

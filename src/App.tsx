@@ -6305,7 +6305,43 @@ function FeatureSettings({ title, body }: { title: string; body: string }) {
 
 function AdvancedSettings({ onClearHistory, onFullSync }: { onClearHistory: () => void; onFullSync: () => void }) {
   const { t } = useAppTranslation();
-  return <div className="settings-scroll"><SettingsGroup title={t("การดูแลข้อมูล")}><SettingRow title={t("ล้างข้อมูลในเครื่อง")} subtitle={t("ใช้เมื่อจะส่งต่อเครื่องหรือแก้ปัญหา database")}><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>ล้างประวัติ</button></SettingRow></SettingsGroup><SettingsGroup title={t("การเชื่อมต่อ")}><SettingRow title="Full sync" subtitle={t("ซิงก์ friends, Talk, OpenChat และประวัติล่าสุดเมื่อสั่งแบบเต็ม")}><button className="secondary-button" type="button" onClick={onFullSync}>{t("เริ่ม Full sync")}</button></SettingRow></SettingsGroup></div>;
+  return <div className="settings-scroll"><SettingsGroup title={t("การดูแลข้อมูล")}><SettingRow title={t("ล้างข้อมูลในเครื่อง")} subtitle={t("ใช้เมื่อจะส่งต่อเครื่องหรือแก้ปัญหา database")}><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>ล้างประวัติ</button></SettingRow></SettingsGroup><SettingsGroup title={t("การเชื่อมต่อ")}><SettingRow title="Full sync" subtitle={t("ซิงก์ friends, Talk, OpenChat และประวัติล่าสุดเมื่อสั่งแบบเต็ม")}><button className="secondary-button" type="button" onClick={onFullSync}>{t("เริ่ม Full sync")}</button></SettingRow></SettingsGroup><McpSettings /></div>;
+}
+
+type McpState = { enabled: boolean; allowSend: boolean; port: number; token: string; running: boolean; error: string };
+function McpSettings() {
+  const { t } = useAppTranslation();
+  const [mcp, setMcp] = useState<McpState | null>(null);
+  const [port, setPort] = useState("");
+  const [copied, setCopied] = useState(false);
+  const apply = useCallback(async (patch: Record<string, unknown>) => {
+    try {
+      const next = await invoke<McpState>("mcp_set", patch);
+      setMcp(next); setPort(String(next.port));
+    } catch { /* keep previous state */ }
+  }, []);
+  useEffect(() => {
+    let active = true;
+    void invoke<McpState>("mcp_get").then((value) => { if (active) { setMcp(value); setPort(String(value.port)); } }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+  if (!mcp) return null;
+  const status = mcp.error ? t("เริ่มไม่สำเร็จ: {{error}}", { error: mcp.error }) : mcp.running ? t("ทำงานอยู่: {{url}}", { url: `http://127.0.0.1:${mcp.port}/mcp` }) : t("ปิดอยู่");
+  return <SettingsGroup title={t("เซิร์ฟเวอร์ MCP")}>
+    <SettingRow title={t("เปิดใช้ MCP server")} subtitle={t("ฟังเฉพาะ 127.0.0.1 และต้องใช้ token ก่อนเรียกใช้")}>
+      <Toggle checked={mcp.enabled} onChange={(enabled) => void apply({ enabled })} />
+    </SettingRow>
+    <SettingRow title={t("อนุญาตให้ส่งข้อความ (send_message)")} subtitle={t("MCP client จะส่งข้อความในนามคุณได้ ปิดไว้เป็นค่าเริ่มต้น")}>
+      <Toggle checked={mcp.allowSend} onChange={(allowSend) => void apply({ allowSend })} />
+    </SettingRow>
+    <SettingRow title={t("พอร์ต")} subtitle={status}>
+      <input className="mcp-port-input" type="number" min={1024} max={65535} value={port} onChange={(event) => setPort(event.target.value)} onBlur={() => { const value = Number(port); if (Number.isInteger(value) && value !== mcp.port) void apply({ port: value }); else setPort(String(mcp.port)); }} />
+    </SettingRow>
+    <SettingRow title={t("โทเคนสำหรับเชื่อมต่อ")} subtitle={t("ใช้ใน Authorization: Bearer <token> · เก็บเป็นความลับ")}>
+      <button className="secondary-button" type="button" onClick={() => { void navigator.clipboard.writeText(mcp.token).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); }); }}>{copied ? t("คัดลอกแล้ว") : t("คัดลอก token")}</button>
+      <button className="secondary-button" type="button" onClick={() => void apply({ regenToken: true })}>{t("สร้าง token ใหม่")}</button>
+    </SettingRow>
+  </SettingsGroup>;
 }
 
 function DeveloperSettings({ settings, onSetting }: { settings: AppSettings; onSetting: (key: keyof AppSettings, value: boolean) => void }) {

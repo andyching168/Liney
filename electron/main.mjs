@@ -7,13 +7,14 @@ import updater from "electron-updater";
 const { autoUpdater } = updater;
 import { Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
-import { writeFile, mkdir, stat } from "node:fs/promises";
+import { writeFile, mkdir, stat, readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, installNativeEditShortcuts, resetEditActionCalls } from "./edit-menu.mjs";
 import { resolveUpdaterConfig } from "./updater-config.mjs";
+import * as mcpServer from "./mcp-server.mjs";
 
 protocol.registerSchemesAsPrivileged([
   {scheme:"lineyapp",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}
@@ -130,6 +131,36 @@ function broadcast(type, payload) {
   }
 }
 
+
+// ---- Built-in MCP server (loopback + bearer token; send is opt-in) ----
+const mcpDefaults = { enabled: false, allowSend: false, port: 39817, token: "" };
+const mcpConfigPath = path.join(stateDir, "mcp.json");
+let mcpError = "";
+async function getMcp() {
+  let stored = {};
+  try { stored = JSON.parse(await readFile(mcpConfigPath, "utf8")); } catch {}
+  const cfg = { ...mcpDefaults, ...stored };
+  if (!cfg.token) { cfg.token = mcpServer.newToken(); await saveMcp(cfg); }
+  return cfg;
+}
+async function saveMcp(cfg) {
+  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  await writeFile(mcpConfigPath, JSON.stringify(cfg), { mode: 0o600 });
+}
+const mcpMethods = new Set(["chat.list", "message.list", "message.send"]);
+async function mcpCall(method, params, timeout) {
+  if (!mcpMethods.has(method)) throw new Error("unknown method");
+  await ensureEngine();
+  return requestEngine(method, params, timeout);
+}
+async function applyMcp() {
+  const cfg = await getMcp();
+  mcpError = "";
+  await mcpServer.stop();
+  if (!cfg.enabled) return;
+  try { await mcpServer.start({ port: cfg.port, token: cfg.token, allowSend: cfg.allowSend, call: mcpCall }); }
+  catch (error) { mcpError = error.code === "EADDRINUSE" ? `Port ${cfg.port} is already in use` : String(error.message || error); }
+}
 function destroyTray() {
   if (!tray) return;
   try { tray.destroy(); } catch (error) {
@@ -334,6 +365,18 @@ async function runDesktopCommand(command,args={}) {
       if (!updateConfigured || updateState.status !== "downloaded") throw new Error("Update has not been downloaded and verified");
       autoUpdater.quitAndInstall(true, true);
       return true;
+    case "mcp_get":
+      return { ...(await getMcp()), running: mcpServer.running(), error: mcpError };
+    case "mcp_set": {
+      const next = await getMcp();
+      if (typeof args.enabled === "boolean") next.enabled = args.enabled;
+      if (typeof args.allowSend === "boolean") next.allowSend = args.allowSend;
+      if (Number.isInteger(args.port) && args.port >= 1024 && args.port <= 65535) next.port = args.port;
+      if (args.regenToken === true) next.token = mcpServer.newToken();
+      await saveMcp(next);
+      await applyMcp();
+      return { ...(await getMcp()), running: mcpServer.running(), error: mcpError };
+    }
     case "set_close_to_tray": {
       if (Boolean(args.enabled)) {
         // Never hide the only window unless Electron successfully created a
@@ -601,8 +644,9 @@ app.whenReady().then(async()=>{
   }
   configureUpdater();
   createWindow();
+  void applyMcp().catch(error => console.error("MCP server failed to start:", error?.message || error));
   if (updateConfigured) setTimeout(() => { void checkForUpdates().catch(() => {}); }, 30000);
 });
 app.on("window-all-closed",()=>{if(!closeToTray)app.quit();});
 app.on("before-quit",()=>{quitting=true;closeToTray=false;destroyTray();});
-app.on("will-quit",()=>{if(engine)void stopEngine();});
+app.on("will-quit",()=>{void mcpServer.stop();if(engine)void stopEngine();});
