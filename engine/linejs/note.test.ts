@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  noteRoomId, notePostId, projectNoteList, listNotes, createNote, updateNote, deleteNote, likeNote, commentNote,
+  noteRoomId, notePostId, projectNoteList, listNotes, getNote, createNote, updateNote, deleteNote, likeNote, commentNote,
 } from "./notes";
 
 const room = `c${"a".repeat(32)}`;
@@ -69,5 +69,70 @@ describe("LINE Note operations", () => {
 
   test("never treats incompatible response formats as successful empty feed", () => {
     expect(() => projectNoteList({ other: [] }, room)).toThrow("Unsupported LINE Note response");
+  });
+
+  test("uploads multiple Note JPEGs and attaches all mediaObjectIds in order", async () => {
+    const { client, calls } = fakeClient();
+    let seq = 0;
+    client.base.timeline.uploadNoteMedia = async (type: string, data: Blob) => {
+      seq++;
+      calls.push({ method: "uploadNoteMedia", params: { type, size: data.size } });
+      return { objId: `photo-${seq}`, objHash: `hash-${seq}` };
+    };
+    const jpeg = `data:image/jpeg;base64,${Buffer.from([255, 216, 255, 224, 0, 0]).toString("base64")}`;
+    await createNote(client, room, "multi photo note", [jpeg, jpeg, jpeg]);
+    expect(calls.filter((c) => c.method === "uploadNoteMedia")).toHaveLength(3);
+    expect(calls[3]).toMatchObject({
+      method: "createPost",
+      params: {
+        homeId: room,
+        text: "multi photo note",
+        mediaObjectIds: ["photo-1", "photo-2", "photo-3"],
+        mediaObjectTypes: ["PHOTO", "PHOTO", "PHOTO"],
+      },
+    });
+  });
+
+  test("projects feeds-wrapped Note posts with media metadata", () => {
+    const projected = projectNoteList({
+      feeds: [{
+        post: {
+          postInfo: { postId: "p-99", writerMid: "u-1", writerName: "Alice", createdTime: 1700000000000, likeCount: 2, commentCount: 1 },
+          contents: { text: "hello feed", media: [{ objectId: "oid-1", type: "PHOTO", serviceName: "myhome", obsNamespace: "h" }] },
+        },
+      }],
+      nextScrollId: "cursor-2",
+    }, room, "u-1");
+    expect(projected.nextPostId).toBe("cursor-2");
+    expect(projected.posts[0]).toMatchObject({
+      postId: "p-99",
+      author: "Alice",
+      canEdit: true,
+      hasMedia: true,
+      media: [{ objectId: "oid-1", type: "PHOTO", serviceName: "myhome", obsNamespace: "h" }],
+    });
+  });
+
+  test("getNote unwraps result.feed and falls back to listNotes when getPost fails", async () => {
+    const { client } = fakeClient();
+    client.base.timeline.getPost = async () => ({
+      code: 200,
+      result: {
+        feed: {
+          postInfo: { postId: "p-77", writerMid: "u-self", createdTime: 1700000000000 },
+          contents: {
+            text: "with photos",
+            media: [{ objectId: "oid-a", type: "PHOTO", serviceName: "privnote", obsNamespace: "post" }],
+          },
+        },
+      },
+    });
+    const post = await getNote(client, room, "p-77");
+    expect(post).toMatchObject({ postId: "p-77", text: "with photos", hasMedia: true });
+    expect(post.media).toHaveLength(1);
+
+    client.base.timeline.getPost = async () => ({ code: 500, message: "temporary" });
+    const fallback = await getNote(client, room, "post-1");
+    expect(fallback).toMatchObject({ postId: "post-1", text: "hello" });
   });
 });

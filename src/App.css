@@ -973,20 +973,49 @@ button { border: 0; background: none; cursor: pointer; }
 /* LINE-style activity cards for Album / Note notifications. */
 .post-notification-card {
   width: min(380px, 62vw);
-  min-height: 78px;
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) 18px;
-  align-items: center;
-  gap: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
   padding: 12px 13px;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--panel);
   box-shadow: 0 3px 12px rgba(45,56,73,.05);
+  transition: border-color .16s ease, background-color .16s ease, box-shadow .16s ease, transform .12s ease;
+}
+.post-notification-card.is-clickable {
+  cursor: pointer;
+}
+.post-notification-card.is-clickable:hover {
+  border-color: color-mix(in srgb, var(--green) 42%, var(--border));
+  background: color-mix(in srgb, var(--panel-2, var(--panel)) 55%, var(--panel));
+  box-shadow: 0 6px 18px rgba(45,56,73,.09);
+}
+.post-notification-card.is-clickable:active {
+  transform: translateY(1px);
+}
+.post-notification-card.is-clickable:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.post-notification-head {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 11px;
+}
+.post-notification-card.has-note-media .post-notification-head {
+  grid-template-columns: 36px minmax(0, 1fr) 18px;
+  gap: 10px;
+}
+.post-notification-card.has-note-media .post-notification-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
 }
 .post-notification-thumb {
-  width: 46px;
-  height: 46px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
   border-radius: 10px;
@@ -1013,7 +1042,7 @@ button { border: 0; background: none; cursor: pointer; }
 }
 .post-notification-topline span {
   color: var(--text);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
 }
 .post-notification-topline small {
@@ -1022,7 +1051,7 @@ button { border: 0; background: none; cursor: pointer; }
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
 }
 .post-notification-copy strong {
   min-width: 0;
@@ -1031,16 +1060,25 @@ button { border: 0; background: none; cursor: pointer; }
   white-space: nowrap;
   font-size: 12px;
   font-weight: 720;
+  color: var(--text);
 }
-.post-notification-copy p {
-  margin: 1px 0 0;
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.45;
+.post-notification-copy p,
+.post-notification-note-body {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.48;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  word-break: break-word;
+}
+.post-notification-copy p {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  -webkit-line-clamp: 2;
 }
 .post-notification-arrow {
   justify-self: end;
@@ -1048,6 +1086,68 @@ button { border: 0; background: none; cursor: pointer; }
   font-size: 23px;
   line-height: 1;
   font-weight: 300;
+  transition: transform .16s ease, color .16s ease;
+}
+.post-notification-card.is-clickable:hover .post-notification-arrow {
+  color: var(--green);
+  transform: translateX(2px);
+}
+.post-notification-media-grid {
+  display: grid;
+  gap: 3px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--panel-2, var(--border));
+}
+.post-notification-media-grid.count-1 {
+  grid-template-columns: 1fr;
+}
+.post-notification-media-grid.count-2,
+.post-notification-media-grid.count-3,
+.post-notification-media-grid.count-4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.post-notification-media-tile {
+  position: relative;
+  overflow: hidden;
+  background: var(--panel-2, #f1f4f8);
+  aspect-ratio: 4 / 3;
+}
+.post-notification-media-grid.count-1 .post-notification-media-tile {
+  aspect-ratio: 16 / 10;
+  max-height: 220px;
+}
+.post-notification-media-grid.count-2 .post-notification-media-tile {
+  aspect-ratio: 1 / 1;
+}
+.post-notification-media-grid.count-3 .post-notification-media-tile:first-child {
+  grid-row: span 2;
+  aspect-ratio: auto;
+  height: 100%;
+}
+.post-notification-media-tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.post-notification-media-fallback {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--subtle);
+}
+.post-notification-media-more {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(16, 22, 32, .56);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
 }
 
 .chat-title-flags { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--subtle); }
@@ -1326,7 +1426,8 @@ button { border: 0; background: none; cursor: pointer; }
   .message-cluster { max-width: 88%; }
   .composer-area { margin-left: 8px; margin-right: 8px; }
   .reply-composer-bar { margin-left: 8px; margin-right: 8px; }
-  .post-notification-card { grid-template-columns: 38px minmax(0, 1fr) 16px; gap: 8px; padding: 10px; }
+  .post-notification-card { padding: 10px; }
+  .post-notification-head { grid-template-columns: 38px minmax(0, 1fr) 16px; gap: 8px; }
   .post-notification-thumb { width: 36px; height: 36px; }
   .link-preview-thumb { flex-basis: 70px; width: 70px; min-height: 70px; }
   .settings-scroll { padding-left: 11px; padding-right: 11px; }

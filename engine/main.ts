@@ -5292,11 +5292,12 @@ async function handle(request: any) {
       switch (method) {
         case "note.list": result = await LineJsAdapter.listNotes(client, homeId, params.beforePostId); break;
         case "note.get": result = await LineJsAdapter.getNote(client, homeId, postId); break;
-        case "note.create": await LineJsAdapter.createNote(client, homeId, value, params.imageData); result = { success: true }; break;
+        case "note.create": await LineJsAdapter.createNote(client, homeId, value, params.images ?? params.imageData); result = { success: true }; break;
         case "note.update": await LineJsAdapter.updateNote(client, homeId, postId, value); result = { success: true }; break;
         case "note.delete": await LineJsAdapter.deleteNote(client, homeId, postId); result = { success: true }; break;
         case "note.like": await LineJsAdapter.likeNote(client, homeId, postId); result = { success: true }; break;
         case "note.comment": await LineJsAdapter.commentNote(client, homeId, postId, value); result = { success: true }; break;
+        case "note.media.preview": result = await LineJsAdapter.previewNoteMedia(client, { homeId, postId, objectId: params.objectId, serviceName: params.serviceName, obsNamespace: params.obsNamespace, url: params.url }); break;
         default: throw new Error("Unknown Note method");
       }
       emit({ id, ok: true, result });

@@ -70,6 +70,15 @@ import { EngineRequestError, lineyEngine } from "./lib/engine";
 import { LanguageProvider, useAppTranslation } from "./lib/i18n";
 import { callMessagePreview, liveMessagePreview, notificationSenderName, officialLineMessageUrl } from "./lib/message-presentation";
 import { notificationAvatarUrl, prepareNotificationArtwork } from "./lib/notification-avatar";
+import {
+  extractNotePostIdFromLink,
+  fetchNoteMediaCached,
+  fetchNotePostCached,
+  getCachedNoteMedia,
+  getCachedNotePost,
+  noteMediaCacheKey,
+  type NotePostItem,
+} from "./lib/note-preview-cache";
 import { MarketingSite, type MarketingView } from "./marketing/MarketingSite";
 import {
   compactTimelineRooms,
@@ -716,7 +725,7 @@ function MainApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [albumsOpen, setAlbumsOpen] = useState(false);
-  const [notesRoom, setNotesRoom] = useState<{ id: string; title: string } | null>(null);
+  const [notesRoom, setNotesRoom] = useState<{ id: string; title: string; initialPostId?: string } | null>(null);
   const [managedChat, setManagedChat] = useState<Chat | null>(null);
   const [settingsInitialTab, setSettingsInitialTab] = useState("ทั่วไป");
   const [messageRefreshNonce, setMessageRefreshNonce] = useState(0);
@@ -3642,7 +3651,7 @@ function MainApp() {
         albumsAvailable={lineyEngine.isNative && authenticated && activeChat.kind !== "openchat"}
         onAlbums={() => setAlbumsOpen(true)}
         notesAvailable={lineyEngine.isNative && authenticated && /^[cs][a-f0-9]{30,}$/i.test(activeChat.id)}
-        onNotes={() => setNotesRoom({ id: activeChat.id, title: activeChat.name })}
+        onNotes={(postId) => setNotesRoom({ id: activeChat.id, title: activeChat.name, ...(postId ? { initialPostId: postId } : {}) })}
         manageAvailable={lineyEngine.isNative && authenticated && ((activeChat.kind === "group" && /^c[a-f0-9]{32}$/i.test(activeChat.id)) || (activeChat.kind === "dm" && /^u[a-f0-9]{32}$/i.test(activeChat.id)))}
         onManage={() => setManagedChat(activeChat)}
         windowActive={windowActive}
@@ -3671,7 +3680,15 @@ function MainApp() {
         )}
         {imageViewerSrc && <ImageViewerOverlay src={imageViewerSrc} onClose={() => setImageViewerSrc(null)} />}
         {albumsOpen && <LineAlbumsModal onClose={() => setAlbumsOpen(false)} />}
-        {notesRoom && <LineNotesModal homeId={notesRoom.id} title={notesRoom.title} onClose={() => setNotesRoom(null)} />}
+        {notesRoom && (
+          <LineNotesModal
+            key={`${notesRoom.id}:${notesRoom.initialPostId ?? ""}`}
+            homeId={notesRoom.id}
+            title={notesRoom.title}
+            initialPostId={notesRoom.initialPostId}
+            onClose={() => setNotesRoom(null)}
+          />
+        )}
         {managedChat && (managedChat.kind === "dm" || managedChat.kind === "group") && <LineChatManageModal room={{ id: managedChat.id, kind: managedChat.kind, name: managedChat.name }} friends={allFriends} onUpdated={() => loadLiveFriends()} onClose={() => setManagedChat(null)} />}
         {settingsOpen && <SettingsModal initialTab={settingsInitialTab} themeMode={themeMode} dark={dark} settings={settings} callAvailable={callAvailable} onLanguageChange={(value) => updateSetting("language", value)} onThemeMode={setThemeMode} onSetting={updateAppSettings} onDensity={(value) => updateSetting("density", value)} onRadius={(value) => updateSetting("radius", value)} onClearHistory={() => void clearLocalHistory()} onClearStickerCache={() => void clearStickerCache()} onFullSync={() => void startFullSync()} onProfileChange={setProfile} onClose={() => setSettingsOpen(false)} />}
         {callOpen && <CallModal chat={callChat} peer={callPeer} remoteVideoFrame={callRemoteVideoFrame} state={callState} muted={callMuted} microphoneAvailable={callMicrophoneAvailable} speakerAvailable={callSpeakerAvailable} videoCapable={callVideoCapable} videoEnabled={callVideoEnabled} cameraAvailable={callCameraAvailable} screenSharing={callScreenSharing} screenShareAvailable={callScreenShareAvailable} screenTargets={callScreenTargets} screenTarget={callScreenTarget} screenManagedBySystem={callScreenManagedBySystem} error={callError} incomingSupported={callIncomingAvailable} outputDevices={callOutputs} outputTarget={callOutputTarget} onAccept={() => void acceptCall("AUDIO")} onAcceptVideo={() => void acceptCall("VIDEO")} onReject={() => void rejectCall()} onMute={() => void toggleCallMute()} onVideo={() => void toggleCallVideo()} onScreenShare={() => void toggleScreenShare()} onUpgradeVideo={() => void upgradeCallToVideo()} mode={callMode} onScreenTarget={setCallScreenTarget} onOutput={(target) => void changeCallOutput(target)} onClose={() => void endCall()} />}
@@ -4376,7 +4393,7 @@ function Conversation({
   albumsAvailable: boolean;
   onAlbums: () => void;
   notesAvailable: boolean;
-  onNotes: () => void;
+  onNotes: (postId?: string) => void;
   manageAvailable: boolean;
   onManage: () => void;
   windowActive: boolean;
@@ -5108,7 +5125,12 @@ function Conversation({
                           {message.contentType === 6 ? (
                             <CallHistoryCard data={message.call ?? { durationMs: 0, result: "", cause: "", status: "unknown" }} />
                           ) : !message.rich && message.postNotification ? (
-                            <PostNotificationCard data={message.postNotification} />
+                            <PostNotificationCard
+                              data={message.postNotification}
+                              chatId={chat.id}
+                              onOpenNote={notesAvailable ? onNotes : undefined}
+                              onOpenAlbum={albumsAvailable ? onAlbums : undefined}
+                            />
                          ) : !message.rich && showMessageText ? (
                            <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}><MessageTextWithLinks text={message.text!} /></div>
                          ) : null}
@@ -5391,23 +5413,166 @@ function TimelineConversation({
   return <Conversation {...props} messages={messages} />;
 }
 
-function PostNotificationCard({ data }: { data: NonNullable<Message["postNotification"]> }) {
+function PostNotificationCard({
+  data,
+  chatId,
+  onOpenNote,
+  onOpenAlbum,
+}: {
+  data: NonNullable<Message["postNotification"]>;
+  chatId: string;
+  onOpenNote?: (postId?: string) => void;
+  onOpenAlbum?: () => void;
+}) {
+  const { t } = useAppTranslation();
   const isAlbum = data.kind === "album";
-  const label = isAlbum ? "อัลบั้ม" : "โน้ต";
+  const postId = !isAlbum ? extractNotePostIdFromLink(data.link) : undefined;
+  const canFetchNote = !isAlbum && lineyEngine.isNative && Boolean(postId) && /^[cs][a-f0-9]{30,}$/i.test(chatId);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [inView, setInView] = useState(false);
+  const [notePost, setNotePost] = useState<NotePostItem | null>(() =>
+    canFetchNote && postId ? (getCachedNotePost(chatId, postId) ?? null) : null,
+  );
+  const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
+  const [mediaErrors, setMediaErrors] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const cached = canFetchNote && postId ? (getCachedNotePost(chatId, postId) ?? null) : null;
+    setNotePost(cached);
+    setMediaUrls({});
+    setMediaErrors({});
+    setInView(false);
+  }, [canFetchNote, chatId, postId]);
+
+  useEffect(() => {
+    if (!canFetchNote || !postId || inView) return;
+    const el = cardRef.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setInView(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          observer.disconnect();
+          setInView(true);
+        }
+      },
+      { rootMargin: "160px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [canFetchNote, inView, postId]);
+
+  useEffect(() => {
+    if (!canFetchNote || !postId || !inView || notePost) return;
+    let active = true;
+    void fetchNotePostCached(chatId, postId).then((fetched) => {
+      if (active && fetched) setNotePost(fetched);
+    });
+    return () => { active = false; };
+  }, [canFetchNote, chatId, inView, notePost, postId]);
+
+  const photoItems = useMemo(
+    () => (notePost?.media ?? []).filter((item) => item.type !== "VIDEO"),
+    [notePost],
+  );
+  const visiblePhotos = useMemo(() => photoItems.slice(0, 4), [photoItems]);
+  const extraPhotoCount = Math.max(0, photoItems.length - 4);
+
+  useEffect(() => {
+    if (!canFetchNote || !postId || !inView || visiblePhotos.length === 0) return;
+    let active = true;
+    for (const item of visiblePhotos) {
+      const key = noteMediaCacheKey(item);
+      const cached = getCachedNoteMedia(item);
+      if (cached) {
+        setMediaUrls((prev) => (prev[key] === cached ? prev : { ...prev, [key]: cached }));
+        continue;
+      }
+      void fetchNoteMediaCached(chatId, postId, item).then((url) => {
+        if (!active) return;
+        if (url) {
+          setMediaUrls((prev) => (prev[key] === url ? prev : { ...prev, [key]: url }));
+        } else {
+          setMediaErrors((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+        }
+      });
+    }
+    return () => { active = false; };
+  }, [canFetchNote, chatId, inView, postId, visiblePhotos]);
+
+  const label = isAlbum ? t("อัลบั้ม") : t("โน้ต");
   const action = isAlbum
-    ? data.action === "created" ? "สร้างอัลบั้ม" : data.action === "added" ? "เพิ่มรูปภาพในอัลบั้ม" : "อัปเดตอัลบั้ม"
-    : "โพสต์ในโน้ต";
+    ? data.action === "created" ? t("สร้างอัลบั้ม") : data.action === "added" ? t("เพิ่มรูปภาพในอัลบั้ม") : t("อัปเดตอัลบั้ม")
+    : t("โพสต์ในโน้ต");
+  const rawTitle = (data.title ?? "").trim();
+  const showTitle = isAlbum
+    ? Boolean(rawTitle)
+    : Boolean(rawTitle) && rawTitle !== "โน้ต" && rawTitle !== label;
+  const bodyText = (data.body || notePost?.text || "").trim();
+  const hasNoteMedia = !isAlbum && visiblePhotos.length > 0;
+  const clickable = isAlbum ? Boolean(onOpenAlbum) : Boolean(onOpenNote);
+
+  const handleOpen = () => {
+    if (isAlbum) onOpenAlbum?.();
+    else onOpenNote?.(postId);
+  };
+
   return (
-    <div className={`post-notification-card ${isAlbum ? "album-card" : "note-card"}`}>
-      <div className="post-notification-thumb">
-        {isAlbum ? <Image size={21} /> : <MessageCircle size={20} />}
+    <div
+      ref={cardRef}
+      className={`post-notification-card ${isAlbum ? "album-card" : "note-card"}${hasNoteMedia ? " has-note-media" : ""}${clickable ? " is-clickable" : ""}`}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      title={clickable ? (isAlbum ? t("อัลบั้มรูปภาพ") : t("เปิดโน้ตนี้")) : undefined}
+      onClick={clickable ? handleOpen : undefined}
+      onKeyDown={clickable ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          handleOpen();
+        }
+      } : undefined}
+    >
+      <div className="post-notification-head">
+        <div className="post-notification-thumb">
+          {isAlbum ? <Image size={21} /> : <MessageCircle size={20} />}
+        </div>
+        <div className="post-notification-copy">
+          <div className="post-notification-topline"><span>{label}</span><small>{action}</small></div>
+          {showTitle ? <strong>{rawTitle}</strong> : null}
+          {!isAlbum && !hasNoteMedia && bodyText ? <p>{bodyText}</p> : null}
+        </div>
+        <span className="post-notification-arrow" aria-hidden="true">›</span>
       </div>
-      <div className="post-notification-copy">
-        <div className="post-notification-topline"><span>{label}</span><small>{action}</small></div>
-        <strong>{data.title}</strong>
-        {!isAlbum && data.body ? <p>{data.body}</p> : null}
-      </div>
-      <span className="post-notification-arrow">›</span>
+      {hasNoteMedia ? (
+        <>
+          {bodyText ? <p className="post-notification-note-body">{bodyText}</p> : null}
+          <div className={`post-notification-media-grid count-${visiblePhotos.length}`}>
+            {visiblePhotos.map((item, idx) => {
+              const key = noteMediaCacheKey(item);
+              const src = mediaUrls[key] ?? getCachedNoteMedia(item) ?? "";
+              const failed = Boolean(mediaErrors[key]);
+              const isLastWithExtra = idx === 3 && extraPhotoCount > 0;
+              return (
+                <div key={key} className="post-notification-media-tile">
+                  {src ? (
+                    <img src={src} alt={t("รูปภาพ")} loading="lazy" />
+                  ) : failed ? (
+                    <span className="post-notification-media-fallback"><Image size={18} /></span>
+                  ) : (
+                    <span className="post-notification-media-fallback"><LoaderCircle size={16} className="spin" /></span>
+                  )}
+                  {isLastWithExtra ? (
+                    <span className="post-notification-media-more">+{extraPhotoCount}</span>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
